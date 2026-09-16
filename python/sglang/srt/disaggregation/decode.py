@@ -351,6 +351,26 @@ class DecodeRequest:
         return self.req.priority
 
 
+def _kv_checksum_supported() -> bool:
+    """Whether a digest taken here can be compared against the prefill's.
+
+    The digest covers the whole prompt, while the prefill only sends
+    [decode_prefix_len, end). With the decode-side radix cache on, a prefix hit
+    leaves that prefix filled from this engine's own cache -- bytes from a
+    different prefill run, which will not match. Disabling is the safe
+    direction: a check that fires on healthy traffic is worse than no check.
+    """
+    if get_disagg().disaggregation_decode_enable_radix_cache:
+        logger.warning(
+            "KV checksum disabled: --disaggregation-decode-enable-radix-cache "
+            "makes the prefill send only the suffix of a prompt, while the "
+            "digest covers the whole of it, so every prefix hit would look "
+            "like corruption."
+        )
+        return False
+    return True
+
+
 class DecodePreallocQueue(DecodeHiCachePreallocMixin):
     """
     Store the requests that are preallocating.
@@ -440,7 +460,7 @@ class DecodePreallocQueue(DecodeHiCachePreallocMixin):
                 self.scheduler.tp_worker.model_runner.swa_max_total_num_tokens,
             )
 
-        if get_disagg().disaggregation_enable_kv_checksum:
+        if get_disagg().disaggregation_enable_kv_checksum and _kv_checksum_supported():
             kv_args = self.kv_manager.kv_args
             self.scheduler.kv_checksum_computer = KvChecksumComputer(
                 device=torch.device(f"cuda:{self.scheduler.ps.gpu_id}"),
